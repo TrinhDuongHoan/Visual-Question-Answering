@@ -36,14 +36,11 @@ class VQADataset(Dataset):
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
         
-        # 1. XỬ LÝ ẢNH (Dùng thẳng cột image_path)
         image_path = row['image_path'] 
         
         try:
             image = Image.open(image_path).convert("RGB")
         except (OSError, FileNotFoundError):
-            # Fallback: Tạo ảnh đen nếu đường dẫn sai hoặc ảnh lỗi
-            # print(f"Warning: Could not read image at {image_path}")
             image = Image.new('RGB', (224, 224), (0, 0, 0))
 
         if self.transform:
@@ -51,7 +48,6 @@ class VQADataset(Dataset):
         else:
             pixel_values = image
 
-        # 2. XỬ LÝ CÂU HỎI
         question_text = str(row['question'])
         q_encoding = self.q_tokenizer(
             question_text,
@@ -61,7 +57,6 @@ class VQADataset(Dataset):
             return_tensors="pt"
         )
 
-        # 3. XỬ LÝ CÂU TRẢ LỜI
         answer_text = str(row['answer'])
         a_encoding = self.a_tokenizer(
             answer_text,
