@@ -47,9 +47,15 @@ class VQANet(nn.Module):
         if labels is not None:
             # Training Mode
             
+            decoder_input_ids = labels.clone()
+
+            pad_token_id = self.decoder.config.pad_token_id if self.decoder.config.pad_token_id is not None else 0
+
+            decoder_input_ids[decoder_input_ids == -100] = pad_token_id
+
             # Lấy embedding của câu trả lời thật từ GPT
             # inputs_embeds của GPT nhận vào vector chứ không nhận ID
-            answer_embeds = self.decoder.transformer.wte(labels) # (Batch, Seq_Len, 768)
+            answer_embeds = self.decoder.transformer.wte(decoder_input_ids) # (Batch, Seq_Len, 768)
             
             # Nối vector Fused vào TRƯỚC vector câu trả lời
             # Tưởng tượng: [FUSED_INFO] + [Câu trả lời]
@@ -67,7 +73,7 @@ class VQANet(nn.Module):
             
         else:
             # Inference Mode (Sinh câu trả lời) sẽ xử lý sau
-            pass
+            return fused_embeds
 
     def generate_answer(self, pixel_values, question_ids, question_mask, max_length=20):
         """
