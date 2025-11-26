@@ -9,9 +9,9 @@ class TextEncoder(nn.Module):
         
         self.model = AutoModel.from_pretrained(model_name)
         
-        if freeze:
-            for param in self.model.parameters():
-                param.requires_grad = False
+        # if freeze:
+        #     for param in self.model.parameters():
+        #         param.requires_grad = False
 
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
