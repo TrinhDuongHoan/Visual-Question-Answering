@@ -87,8 +87,8 @@ class VQANet(nn.Module):
             pad_token_id=self.decoder.config.pad_token_id,
             eos_token_id=self.decoder.config.eos_token_id,
             num_beams=3, 
-            repetition_penalty=1.5,
-            no_repeat_ngram_size=2,
+            repetition_penalty=1.1,
+            no_repeat_ngram_size=0,
             early_stopping=True
         )
         

@@ -65,10 +65,13 @@ class VQADataset(Dataset):
             truncation=True,
             return_tensors="pt"
         )
+
+        labels = a_encoding['input_ids'].squeeze()
+        labels[labels == self.a_tokenizer.pad_token_id] = -100
         
         return {
             'pixel_values': pixel_values,
             'question_input_ids': q_encoding['input_ids'].squeeze(),
             'question_attention_mask': q_encoding['attention_mask'].squeeze(),
-            'labels': a_encoding['input_ids'].squeeze()
+            'labels': labels
         }
