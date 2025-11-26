@@ -34,11 +34,9 @@ class VQANet(nn.Module):
         labels: Input IDs câu trả lời (Target)
         """
         
-        # --- BƯỚC 1: ENCODE ---
         img_feat = self.image_encoder(pixel_values)           # (Batch, 768)
         txt_feat = self.text_encoder(question_ids, question_mask) # (Batch, 768)
-        
-        # --- BƯỚC 2: FUSE ---
+  
         # Nối 2 vector lại thành (Batch, 1536)
         concat_feat = torch.cat((img_feat, txt_feat), dim=1)
         
@@ -70,3 +68,27 @@ class VQANet(nn.Module):
         else:
             # Inference Mode (Sinh câu trả lời) sẽ xử lý sau
             pass
+
+    def generate_answer(self, pixel_values, question_ids, question_mask, max_length=20):
+        """
+        Hàm dùng để sinh câu trả lời từ ảnh và câu hỏi (Inference).
+        """
+
+        img_feat = self.image_encoder(pixel_values)
+        txt_feat = self.text_encoder(question_ids, question_mask)
+        
+        concat_feat = torch.cat((img_feat, txt_feat), dim=1)
+        
+        fused_embeds = self.fusion(concat_feat).unsqueeze(1) 
+        
+        output_ids = self.decoder.generate(
+            inputs_embeds=fused_embeds,
+            max_new_tokens=max_length, 
+            bos_token_id=self.decoder.config.bos_token_id,
+            pad_token_id=self.decoder.config.pad_token_id,
+            eos_token_id=self.decoder.config.eos_token_id,
+            num_beams=3, 
+            early_stopping=True
+        )
+        
+        return output_ids

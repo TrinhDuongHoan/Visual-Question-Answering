@@ -3,6 +3,7 @@ from tqdm.auto import tqdm
 import torch.nn as nn
 from transformers import get_linear_schedule_with_warmup
 import torch.optim as optim
+import pandas as pd
 
 def get_optimizer_scheduler(model, dataloader, epochs, lr=1e-4):
 
@@ -99,7 +100,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, device, e
             save_checkpoint(model, optimizer, epoch, checkpoint_path)
             print("New best model saved.")
 
-    return history
+    return pd.DataFrame(history)
 
 
 def load_checkpoint(model, optimizer, filename, device):
