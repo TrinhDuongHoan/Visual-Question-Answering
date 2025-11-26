@@ -1,0 +1,76 @@
+import torch
+import torch.nn as nn
+from transformers import GPT2LMHeadModel
+from src.models.image_encoder import ImageEncoder
+from src.models.text_encoder import TextEncoder
+
+class VQANet(nn.Module):
+    def __init__(self, 
+                 vit_name="google/vit-base-patch16-224", 
+                 phobert_name="vinai/phobert-base", 
+                 gpt_name="minhtoan/vietnamese-gpt2-finetune"): # Dùng GPT tiếng Việt
+        super(VQANet, self).__init__()
+        
+        # 1. Khởi tạo Encoder
+        self.image_encoder = ImageEncoder(vit_name)
+        self.text_encoder = TextEncoder(phobert_name)
+        
+        # 2. Khởi tạo Decoder (GPT)
+        print(f"Loading Decoder: {gpt_name}...")
+        self.decoder = GPT2LMHeadModel.from_pretrained(gpt_name)
+        
+        # Lấy kích thước hidden size của các model để tạo lớp kết nối
+        self.img_hidden = self.image_encoder.model.config.hidden_size # 768
+        self.txt_hidden = self.text_encoder.model.config.hidden_size  # 768
+        self.gpt_hidden = self.decoder.config.n_embd                  # 768 hoặc 1024 tùy model
+        
+        # 3. Fusion Layer: Nối ảnh + text rồi chiếu về không gian của GPT
+        self.fusion = nn.Sequential(
+            nn.Linear(self.img_hidden + self.txt_hidden, self.gpt_hidden),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
+
+    def forward(self, pixel_values, question_ids, question_mask, labels=None):
+        """
+        pixel_values: Ảnh
+        question_ids: Input IDs câu hỏi
+        labels: Input IDs câu trả lời (Target)
+        """
+        
+        # --- BƯỚC 1: ENCODE ---
+        img_feat = self.image_encoder(pixel_values)           # (Batch, 768)
+        txt_feat = self.text_encoder(question_ids, question_mask) # (Batch, 768)
+        
+        # --- BƯỚC 2: FUSE ---
+        # Nối 2 vector lại thành (Batch, 1536)
+        concat_feat = torch.cat((img_feat, txt_feat), dim=1)
+        
+        # Chiếu về không gian GPT (Batch, 768) -> Biến đổi thành (Batch, 1, 768) để giả lập 1 token
+        fused_embeds = self.fusion(concat_feat).unsqueeze(1) 
+        
+        # --- BƯỚC 3: DECODE (GPT) ---
+        if labels is not None:
+            # Training Mode
+            
+            # Lấy embedding của câu trả lời thật từ GPT
+            # inputs_embeds của GPT nhận vào vector chứ không nhận ID
+            answer_embeds = self.decoder.transformer.wte(labels) # (Batch, Seq_Len, 768)
+            
+            # Nối vector Fused vào TRƯỚC vector câu trả lời
+            # Tưởng tượng: [FUSED_INFO] + [Câu trả lời]
+            full_inputs_embeds = torch.cat((fused_embeds, answer_embeds), dim=1)
+            
+            # Gọi GPT. Lưu ý: labels cần dịch chuyển hoặc xử lý padding nếu cần kỹ hơn.
+            # Nhưng GPT2LMHeadModel tự động shift labels bên trong để tính loss.
+            # Ta cần tạo labels giả cho phần fused_embeds (là -100 để không tính loss cho phần này)
+            
+            fused_labels = torch.full((labels.shape[0], 1), -100).to(labels.device)
+            full_labels = torch.cat((fused_labels, labels), dim=1)
+
+            outputs = self.decoder(inputs_embeds=full_inputs_embeds, labels=full_labels)
+            return outputs # Chứa loss và logits
+            
+        else:
+            # Inference Mode (Sinh câu trả lời) sẽ xử lý sau
+            pass
