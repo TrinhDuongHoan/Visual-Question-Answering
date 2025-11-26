@@ -76,7 +76,6 @@ class VQANet(nn.Module):
 
         img_feat = self.image_encoder(pixel_values)
         txt_feat = self.text_encoder(question_ids, question_mask)
-        
         concat_feat = torch.cat((img_feat, txt_feat), dim=1)
         
         fused_embeds = self.fusion(concat_feat).unsqueeze(1) 
@@ -88,6 +87,8 @@ class VQANet(nn.Module):
             pad_token_id=self.decoder.config.pad_token_id,
             eos_token_id=self.decoder.config.eos_token_id,
             num_beams=3, 
+            repetition_penalty=1.5,
+            no_repeat_ngram_size=2,
             early_stopping=True
         )
         

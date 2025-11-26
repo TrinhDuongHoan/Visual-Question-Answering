@@ -57,7 +57,7 @@ class VQADataset(Dataset):
             return_tensors="pt"
         )
 
-        answer_text = str(row['answer'])
+        answer_text = str(row['answer']) + " " + self.a_tokenizer.eos_token
         a_encoding = self.a_tokenizer(
             answer_text,
             max_length=self.max_answer_len,
