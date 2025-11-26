@@ -8,23 +8,19 @@ class VQANet(nn.Module):
     def __init__(self, 
                  vit_name="google/vit-base-patch16-224", 
                  phobert_name="vinai/phobert-base", 
-                 gpt_name="minhtoan/vietnamese-gpt2-finetune"): # Dùng GPT tiếng Việt
+                 gpt_name="minhtoan/vietnamese-gpt2-finetune"): 
         super(VQANet, self).__init__()
-        
-        # 1. Khởi tạo Encoder
+
         self.image_encoder = ImageEncoder(vit_name)
         self.text_encoder = TextEncoder(phobert_name)
         
-        # 2. Khởi tạo Decoder (GPT)
         print(f"Loading Decoder: {gpt_name}...")
         self.decoder = GPT2LMHeadModel.from_pretrained(gpt_name)
         
-        # Lấy kích thước hidden size của các model để tạo lớp kết nối
         self.img_hidden = self.image_encoder.model.config.hidden_size # 768
         self.txt_hidden = self.text_encoder.model.config.hidden_size  # 768
         self.gpt_hidden = self.decoder.config.n_embd                  # 768 hoặc 1024 tùy model
         
-        # 3. Fusion Layer: Nối ảnh + text rồi chiếu về không gian của GPT
         self.fusion = nn.Sequential(
             nn.Linear(self.img_hidden + self.txt_hidden, self.gpt_hidden),
             nn.ReLU(),

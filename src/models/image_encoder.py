@@ -16,9 +16,6 @@ class ImageEncoder(nn.Module):
                 param.requires_grad = False
                 
     def forward(self, pixel_values):
-        # pixel_values shape: (Batch_Size, 3, 224, 224)
+
         outputs = self.model(pixel_values)
-        
-        # Lấy pooler_output (CLS token) đại diện cho cả tấm ảnh
-        # Shape: (Batch_Size, hidden_size) -> thường là 768
         return outputs.pooler_output
