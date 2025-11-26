@@ -7,8 +7,7 @@ from torch.utils.data import Dataset
 class VQADataset(Dataset):
     def __init__(
         self, 
-        csv_file, 
-        image_dir, 
+        dataframe,  
         question_tokenizer, 
         answer_tokenizer, 
         transform=None, 
@@ -17,16 +16,14 @@ class VQADataset(Dataset):
     ):
         """
         Args:
-            csv_file (str): Đường dẫn đến file CSV.
-            image_dir (str): Thư mục chứa ảnh.
+            dataframe (pd.DataFrame): DataFrame đã chứa cột 'image_path'.
             question_tokenizer: Tokenizer của PhoBERT (cho câu hỏi).
             answer_tokenizer: Tokenizer của GPT (cho câu trả lời).
             transform: Các phép biến đổi ảnh (Resize, Normalize...).
             max_question_len: Độ dài tối đa của câu hỏi.
             max_answer_len: Độ dài tối đa của câu trả lời.
         """
-        self.data = pd.read_csv(csv_file)
-        self.image_dir = image_dir
+        self.data = dataframe
         self.q_tokenizer = question_tokenizer
         self.a_tokenizer = answer_tokenizer
         self.transform = transform
@@ -39,13 +36,14 @@ class VQADataset(Dataset):
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
         
-        image_name = row['image_name']
-        image_path = os.path.join(self.image_dir, image_name)
+        # 1. XỬ LÝ ẢNH (Dùng thẳng cột image_path)
+        image_path = row['image_path'] 
         
         try:
             image = Image.open(image_path).convert("RGB")
-        except:
-            print(f"Warning: Could not read image {image_path}")
+        except (OSError, FileNotFoundError):
+            # Fallback: Tạo ảnh đen nếu đường dẫn sai hoặc ảnh lỗi
+            # print(f"Warning: Could not read image at {image_path}")
             image = Image.new('RGB', (224, 224), (0, 0, 0))
 
         if self.transform:
@@ -53,9 +51,8 @@ class VQADataset(Dataset):
         else:
             pixel_values = image
 
+        # 2. XỬ LÝ CÂU HỎI
         question_text = str(row['question'])
-        
-        # Tokenize cho PhoBERT
         q_encoding = self.q_tokenizer(
             question_text,
             max_length=self.max_question_len,
@@ -64,12 +61,8 @@ class VQADataset(Dataset):
             return_tensors="pt"
         )
 
-        # -----------------------------------------------------------
-        # 3. XỬ LÝ CÂU TRẢ LỜI (ANSWER - DECODER TARGET)
-        # -----------------------------------------------------------
+        # 3. XỬ LÝ CÂU TRẢ LỜI
         answer_text = str(row['answer'])
-        
-        # Tokenize cho GPT (Decoder cần labels để học sinh từ)
         a_encoding = self.a_tokenizer(
             answer_text,
             max_length=self.max_answer_len,
@@ -79,8 +72,8 @@ class VQADataset(Dataset):
         )
         
         return {
-            'pixel_values': pixel_values,                          # Input cho ViT
-            'question_input_ids': q_encoding['input_ids'].squeeze(),       # Input cho PhoBERT
+            'pixel_values': pixel_values,
+            'question_input_ids': q_encoding['input_ids'].squeeze(),
             'question_attention_mask': q_encoding['attention_mask'].squeeze(),
-            'labels': a_encoding['input_ids'].squeeze()            # Target cho GPT loss
+            'labels': a_encoding['input_ids'].squeeze()
         }
