@@ -84,8 +84,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     for epoch in range(epochs):
         print(f"\nEpoch {epoch+1}/{epochs}")
         
-        train_loss = train_epoch(model, train_loader, optimizer, scheduler, device, criterion)
-        val_loss = validate(model, val_loader, device, criterion)
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, scheduler, device)
+        val_loss = validate(model, val_loader, criterion, device)
         
         print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
         
