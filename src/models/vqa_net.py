@@ -8,94 +8,100 @@ class VQANet(nn.Module):
     def __init__(self, 
                  vit_name="google/vit-base-patch16-224", 
                  phobert_name="vinai/phobert-base", 
-                 gpt_name="minhtoan/vietnamese-gpt2-finetune"): 
+                 gpt_name="minhtoan/vietnamese-gpt2-finetune"):
         super(VQANet, self).__init__()
-
-        self.image_encoder = ImageEncoder(vit_name)
-        self.text_encoder = TextEncoder(phobert_name)
         
-        print(f"Loading Decoder: {gpt_name}...")
+        # 1. Encoders (Quan trọng: Freeze=False để học tinh chỉnh)
+        self.image_encoder = ImageEncoder(vit_name, freeze=False)
+        self.text_encoder = TextEncoder(phobert_name, freeze=False)
+        
+        # 2. Decoder
         self.decoder = GPT2LMHeadModel.from_pretrained(gpt_name)
         
-        self.img_hidden = self.image_encoder.model.config.hidden_size # 768
-        self.txt_hidden = self.text_encoder.model.config.hidden_size  # 768
-        self.gpt_hidden = self.decoder.config.n_embd                  # 768 hoặc 1024 tùy model
+        # 3. Projectors (Cầu nối)
+        # Vì ViT và PhoBERT có thể khác chiều với GPT, ta cần lớp Linear để chiếu về cùng chiều
+        self.img_hidden = self.image_encoder.model.config.hidden_size
+        self.txt_hidden = self.text_encoder.model.config.hidden_size
+        self.gpt_hidden = self.decoder.config.n_embd
         
-        self.fusion = nn.Sequential(
-            nn.Linear(self.img_hidden + self.txt_hidden, self.gpt_hidden),
-            nn.ReLU(),
-            nn.Dropout(0.3)
-        )
+        # Chiếu đặc trưng ảnh sang không gian GPT
+        self.img_projector = nn.Linear(self.img_hidden, self.gpt_hidden)
+        
+        # Chiếu đặc trưng text sang không gian GPT
+        self.txt_projector = nn.Linear(self.txt_hidden, self.gpt_hidden)
+        
+        # Layer Norm để ổn định training (Rất quan trọng cho Generative)
+        self.ln_visual = nn.LayerNorm(self.gpt_hidden)
 
     def forward(self, pixel_values, question_ids, question_mask, labels=None):
-        """
-        pixel_values: Ảnh
-        question_ids: Input IDs câu hỏi
-        labels: Input IDs câu trả lời (Target)
-        """
+        # --- BƯỚC 1: ENCODE ---
+        # Ảnh: (Batch, 197, 768) - Giữ nguyên không gian
+        img_feat = self.image_encoder(pixel_values)
         
-        img_feat = self.image_encoder(pixel_values)           # (Batch, 768)
-        txt_feat = self.text_encoder(question_ids, question_mask) # (Batch, 768)
-  
-        # Nối 2 vector lại thành (Batch, 1536)
-        concat_feat = torch.cat((img_feat, txt_feat), dim=1)
+        # Câu hỏi: (Batch, Seq_Len, 768) - Lấy sequence, không lấy pooler
+        # Lưu ý: TextEncoder cũ của bạn trả về pooler, cần sửa lại TextEncoder
+        # Hoặc dùng luôn output của model bên dưới:
+        txt_outputs = self.text_encoder.model(input_ids=question_ids, attention_mask=question_mask)
+        txt_feat = txt_outputs.last_hidden_state # (Batch, Q_Len, 768)
         
-        # Chiếu về không gian GPT (Batch, 768) -> Biến đổi thành (Batch, 1, 768) để giả lập 1 token
-        fused_embeds = self.fusion(concat_feat).unsqueeze(1) 
+        # --- BƯỚC 2: PROJECTION (Mapping) ---
+        # Đưa tất cả về không gian vector của GPT
+        img_embeds = self.img_projector(img_feat) # (Batch, 197, GPT_Hidden)
+        img_embeds = self.ln_visual(img_embeds)   # Chuẩn hóa
         
-        # --- BƯỚC 3: DECODE (GPT) ---
+        txt_embeds = self.txt_projector(txt_feat) # (Batch, Q_Len, GPT_Hidden)
+        
+        # --- BƯỚC 3: CONCATENATE (Nối chuỗi) ---
+        # Input cho GPT sẽ là: [ẢNH] [CÂU HỎI] [CÂU TRẢ LỜI]
+        # GPT sẽ nhìn thấy toàn bộ ảnh trước, rồi đến câu hỏi
+        inputs_embeds = torch.cat((img_embeds, txt_embeds), dim=1) # (Batch, 197 + Q_Len, GPT_Hidden)
+
+        img_mask = torch.ones((pixel_values.shape[0], 197), device=pixel_values.device)
+        
+        # Mask của câu hỏi: Lấy từ question_mask truyền vào (có số 0 ở chỗ padding)
+        # Shape: (Batch, Seq_Len)
+        
+        # Nối Mask: [Mask Ảnh] + [Mask Câu hỏi]
+        gpt_attention_mask = torch.cat((img_mask, question_mask), dim=1)
+        
+        # --- BƯỚC 4: DECODE (Training) ---
         if labels is not None:
-            # Training Mode
-            
+            # Lấy embedding của câu trả lời thật
+            # Lưu ý xử lý labels -100 như đã bàn trước đó
             decoder_input_ids = labels.clone()
-
-            pad_token_id = self.decoder.config.pad_token_id if self.decoder.config.pad_token_id is not None else 0
-
-            decoder_input_ids[decoder_input_ids == -100] = pad_token_id
-
-            # Lấy embedding của câu trả lời thật từ GPT
-            # inputs_embeds của GPT nhận vào vector chứ không nhận ID
-            answer_embeds = self.decoder.transformer.wte(decoder_input_ids) # (Batch, Seq_Len, 768)
+            pad_id = self.decoder.config.pad_token_id if self.decoder.config.pad_token_id else 0
+            decoder_input_ids[decoder_input_ids == -100] = pad_id
             
-            # Nối vector Fused vào TRƯỚC vector câu trả lời
-            # Tưởng tượng: [FUSED_INFO] + [Câu trả lời]
-            full_inputs_embeds = torch.cat((fused_embeds, answer_embeds), dim=1)
+            ans_embeds = self.decoder.transformer.wte(decoder_input_ids)
             
-            # Gọi GPT. Lưu ý: labels cần dịch chuyển hoặc xử lý padding nếu cần kỹ hơn.
-            # Nhưng GPT2LMHeadModel tự động shift labels bên trong để tính loss.
-            # Ta cần tạo labels giả cho phần fused_embeds (là -100 để không tính loss cho phần này)
+            # Nối toàn bộ: [ẢNH + CÂU HỎI] + [CÂU TRẢ LỜI]
+            full_inputs_embeds = torch.cat((inputs_embeds, ans_embeds), dim=1)
             
-            fused_labels = torch.full((labels.shape[0], 1), -100).to(labels.device)
-            full_labels = torch.cat((fused_labels, labels), dim=1)
-
-            outputs = self.decoder(inputs_embeds=full_inputs_embeds, labels=full_labels)
-            return outputs # Chứa loss và logits
+            # Tạo labels giả cho phần [ẢNH + CÂU HỎI] là -100 (không tính loss)
+            context_len = inputs_embeds.shape[1] # 197 + Q_Len
+            context_labels = torch.full((labels.shape[0], context_len), -100).to(labels.device)
+            
+            full_labels = torch.cat((context_labels, labels), dim=1)
+            
+            return self.decoder(inputs_embeds=full_inputs_embeds, attention_mask=gpt_attention_mask, labels=full_labels)
             
         else:
-            # Inference Mode (Sinh câu trả lời) sẽ xử lý sau
-            return fused_embeds
+            return inputs_embeds # Trả về context để dùng cho hàm generate
 
     def generate_answer(self, pixel_values, question_ids, question_mask, max_length=20):
-        """
-        Hàm dùng để sinh câu trả lời từ ảnh và câu hỏi (Inference).
-        """
-
-        img_feat = self.image_encoder(pixel_values)
-        txt_feat = self.text_encoder(question_ids, question_mask)
-        concat_feat = torch.cat((img_feat, txt_feat), dim=1)
+        # 1. Tạo Context (Ảnh + Câu hỏi)
+        inputs_embeds = self.forward(pixel_values, question_ids, question_mask)
         
-        fused_embeds = self.fusion(concat_feat).unsqueeze(1) 
-        
+        # 2. Sinh từ
         output_ids = self.decoder.generate(
-            inputs_embeds=fused_embeds,
-            max_new_tokens=max_length, 
+            inputs_embeds=inputs_embeds,
+            max_new_tokens=max_length,
             bos_token_id=self.decoder.config.bos_token_id,
             pad_token_id=self.decoder.config.pad_token_id,
             eos_token_id=self.decoder.config.eos_token_id,
-            num_beams=3, 
-            repetition_penalty=1.1,
-            no_repeat_ngram_size=0,
+            num_beams=3,
+            repetition_penalty=1.2, # Mức phạt nhẹ nhàng
+            no_repeat_ngram_size=0, # Tắt cái này đi nếu hay bị lỗi từ lạ
             early_stopping=True
         )
-        
         return output_ids
