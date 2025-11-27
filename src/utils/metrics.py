@@ -1,5 +1,6 @@
 import torch
 import evaluate
+import pandas as pd
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 
 def compute_model_size(model):
@@ -41,3 +42,16 @@ def compute_rouge(predictions, references):
         "rouge1": round(results["rouge1"], 4),
         "rougeL": round(results["rougeL"], 4)
     }
+
+def evaluate_metrics(predictions, references):
+    bleu_scores = compute_bleu(predictions, references)
+    meteor_score = compute_meteor(predictions, references)
+    rouge_scores = compute_rouge(predictions, references)
+    
+    metrics = {
+        **bleu_scores,
+        "meteor": meteor_score,
+        **rouge_scores
+    }
+    
+    return pd.DataFrame([metrics])

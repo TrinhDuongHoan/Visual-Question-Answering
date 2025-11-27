@@ -16,4 +16,10 @@ def plot_history(history):
     plt.show()
 
     
+def show_sample_predictions(images, questions, predictions, references, num_samples=5):
+    for i in range(num_samples):
+        plt.imshow(images[i])
+        plt.axis('off')
+        plt.title(f"Q: {questions[i]}\nPred: {predictions[i]}\nRef: {references[i]}")
+        plt.show()
 
