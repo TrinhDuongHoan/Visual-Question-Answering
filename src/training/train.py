@@ -108,7 +108,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                 print(f"Early stopping at epoch {epoch+1}.")
                 break
             
-    return history
+    return pd.DataFrame(history)
 
 
 def load_checkpoint(model, optimizer, filename, device):
