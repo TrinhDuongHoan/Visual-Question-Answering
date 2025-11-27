@@ -12,8 +12,8 @@ class VQANet(nn.Module):
                  hidden_dim=512):
         super(VQANet, self).__init__()
         
-        self.image_encoder = ImageEncoder(vit_name, freeze=False)
-        self.text_encoder = TextEncoder(phobert_name, freeze=False)
+        self.image_encoder = ImageEncoder(vit_name, freeze=True)
+        self.text_encoder = TextEncoder(phobert_name, freeze=True)
         self.decoder = LSTMDecoder(vocab_size, embed_dim, hidden_dim)
         
         img_dim = self.image_encoder.model.config.hidden_size
