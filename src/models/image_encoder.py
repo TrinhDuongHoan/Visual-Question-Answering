@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import ViTModel
 
 class ImageEncoder(nn.Module):
-    def __init__(self, model_name="google/vit-base-patch16-224", freeze=False):
+    def __init__(self, model_name="google/vit-base-patch16-224", freeze=True):
         super(ImageEncoder, self).__init__()
         self.model = ViTModel.from_pretrained(model_name)
         

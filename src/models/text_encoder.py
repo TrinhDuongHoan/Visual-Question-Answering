@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import AutoModel
 
 class TextEncoder(nn.Module):
-    def __init__(self, model_name="vinai/phobert-base", freeze=False):
+    def __init__(self, model_name="vinai/phobert-base", freeze=True):
         super(TextEncoder, self).__init__()
         self.model = AutoModel.from_pretrained(model_name)
         
