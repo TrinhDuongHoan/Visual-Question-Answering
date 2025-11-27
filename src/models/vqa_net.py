@@ -24,7 +24,7 @@ class VQANet(nn.Module):
         self.fusion = nn.Sequential(
             nn.Linear(self.img_hidden + self.txt_hidden, self.gpt_hidden),
             nn.ReLU(),
-            nn.Dropout(0.1)
+            nn.Dropout(0.3)
         )
 
     def forward(self, pixel_values, question_ids, question_mask, labels=None):
