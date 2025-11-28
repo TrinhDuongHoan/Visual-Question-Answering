@@ -1,119 +1,76 @@
+import os
 import torch
 from tqdm.auto import tqdm
-import torch.nn as nn
-from transformers import get_linear_schedule_with_warmup
-import torch.optim as optim
-import pandas as pd
+from src.utils.metrics import compute_loss
 
-def get_optimizer_scheduler(model, dataloader, epochs, lr=1e-4):
+class Trainer:
+    def __init__(self, model, train_loader, val_loader, optimizer, scheduler, cfg):
+        self.model = model
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.cfg = cfg
+        self.best_loss = float('inf')
 
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
-    num_training_steps = len(dataloader) * epochs
-    num_warmup_steps = int(num_training_steps * 0.1) 
-
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, 
-        num_warmup_steps=num_warmup_steps, 
-        num_training_steps=num_training_steps
-    )
-    
-    return optimizer, scheduler
-
-
-def train_epoch(model, dataloader, criterion, optimizer, scheduler, device):
-
-    model.train()
-    total_loss = 0
-    progress_bar = tqdm(dataloader, desc="Training", leave=False)
-    
-    for batch in progress_bar:
-        pixel_values = batch['pixel_values'].to(device)
-        q_ids = batch['question_input_ids'].to(device)
-        q_mask = batch['question_attention_mask'].to(device)
-        labels = batch['labels'].to(device)
+    def train_epoch(self, epoch):
+        self.model.train()
+        total_loss = 0
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1} Train")
         
-        optimizer.zero_grad()
-        
-        logits = model(pixel_values, q_ids, q_mask, labels=labels)
-        
-        targets = labels[:, 1:]
-        
-        loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-
-        loss.backward()
-        optimizer.step()
-
-        scheduler.step()
+        for batch in pbar:
+            images = batch["images"].to(self.cfg.DEVICE)
+            q_ids  = batch["q_input_ids"].to(self.cfg.DEVICE)
+            q_mask = batch["q_attention_mask"].to(self.cfg.DEVICE)
+            ans_ids= batch["answer_ids"].to(self.cfg.DEVICE)
             
-        total_loss += loss.item()
-        progress_bar.set_postfix({'loss': loss.item()})
-        
-    return total_loss / len(dataloader)
-
-def validate(model, dataloader, criterion, device):
-
-    model.eval()
-    total_loss = 0
-    
-    with torch.no_grad():
-        progress_bar = tqdm(dataloader, desc="Validating", leave=False)
-        
-        for batch in progress_bar:
-            pixel_values = batch['pixel_values'].to(device)
-            q_ids = batch['question_input_ids'].to(device)
-            q_mask = batch['question_attention_mask'].to(device)
-            labels = batch['labels'].to(device)
+            self.optimizer.zero_grad()
+            logits, targets = self.model(images, q_ids, q_mask, ans_ids)
             
-            logits = model(pixel_values, q_ids, q_mask, labels=labels)
-            
-            targets = labels[:, 1:]
-            loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            loss = compute_loss(logits, targets, self.model.vocab.PAD_ID)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
             
             total_loss += loss.item()
+            pbar.set_postfix({"loss": loss.item()})
             
-    return total_loss / len(dataloader)
+        return total_loss / len(self.train_loader)
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, epochs, checkpoint_path):
+    def eval_epoch(self, epoch):
+        self.model.eval()
+        total_loss = 0
+        with torch.no_grad():
+            for batch in tqdm(self.val_loader, desc=f"Epoch {epoch+1} Val"):
+                images = batch["images"].to(self.cfg.DEVICE)
+                q_ids  = batch["q_input_ids"].to(self.cfg.DEVICE)
+                q_mask = batch["q_attention_mask"].to(self.cfg.DEVICE)
+                ans_ids= batch["answer_ids"].to(self.cfg.DEVICE)
+                
+                logits, targets = self.model(images, q_ids, q_mask, ans_ids)
+                loss = compute_loss(logits, targets, self.model.vocab.PAD_ID)
+                total_loss += loss.item()
+        return total_loss / len(self.val_loader)
 
-    patience = 3
-    bad_epoch = 0
-
-    best_val_loss = float('inf')
-    history = {'train_loss': [], 'val_loss': []}
-    
-    for epoch in range(epochs):
-        print(f"\nEpoch {epoch+1}/{epochs}")
+    def fit(self):
+        os.makedirs(self.cfg.CHECKPOINT_DIR, exist_ok=True)
+        no_imp = 0
         
-        train_loss = train_epoch(model, train_loader, criterion, optimizer, scheduler, device)
-        val_loss = validate(model, val_loader, criterion, device)
-        
-        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        
-        history['train_loss'].append(train_loss)
-        history['val_loss'].append(val_loss)
-        
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            bad_epoch = 0
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': best_val_loss,
-            }, checkpoint_path)
-            print("🔥 New best model saved!")
-        else:
-            bad_epoch += 1
-            if bad_epoch >= patience:
-                print(f"Early stopping at epoch {epoch+1}.")
-                break
+        for epoch in range(self.cfg.NUM_EPOCHS):
+            train_loss = self.train_epoch(epoch)
+            val_loss = self.eval_epoch(epoch)
             
-    return pd.DataFrame(history)
-
-
-def load_checkpoint(model, optimizer, filename, device):
-    checkpoint = torch.load(filename, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    print(f"Loaded checkpoint: {filename}")
-    return model
-
+            print(f"Epoch {epoch+1}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+            self.scheduler.step(val_loss)
+            
+            if val_loss < self.best_loss:
+                self.best_loss = val_loss
+                save_path = os.path.join(self.cfg.CHECKPOINT_DIR, "best_model.pt")
+                torch.save(self.model.state_dict(), save_path)
+                print(f"Saved best model to {save_path}")
+                no_imp = 0
+            else:
+                no_imp += 1
+                if no_imp >= self.cfg.EARLY_STOP_PATIENCE:
+                    print("Early stopping triggered.")
+                    break

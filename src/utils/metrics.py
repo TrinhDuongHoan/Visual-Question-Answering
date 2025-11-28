@@ -1,7 +1,10 @@
 import torch
-import evaluate
 import pandas as pd
-from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+import torch.nn.functional as F
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from nltk.translate.meteor_score import meteor_score
+from rouge_score import rouge_scorer
+from src.data.tokenizer import vi_seg
 
 def compute_model_size(model):
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -11,47 +14,52 @@ def compute_model_size(model):
     
     return trainable_params, total_params
 
-def compute_bleu(predictions, references):
 
-    preds_tokenized = [p.split() for p in predictions]
-    refs_tokenized = [[r.split()] for r in references] 
-
-    chencherry = SmoothingFunction()
-
-    bleu1 = corpus_bleu(refs_tokenized, preds_tokenized, weights=(1.0, 0, 0, 0), smoothing_function=chencherry.method1)
-    bleu2 = corpus_bleu(refs_tokenized, preds_tokenized, weights=(0.5, 0.5, 0, 0), smoothing_function=chencherry.method1)
-    bleu3 = corpus_bleu(refs_tokenized, preds_tokenized, weights=(0.33, 0.33, 0.33, 0), smoothing_function=chencherry.method1)
-    bleu4 = corpus_bleu(refs_tokenized, preds_tokenized, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=chencherry.method1)
-
-    return {
-        "bleu1": round(bleu1, 4),
-        "bleu2": round(bleu2, 4),
-        "bleu3": round(bleu3, 4),
-        "bleu4": round(bleu4, 4)
-    }
-
-def compute_meteor(predictions, references):
-    meteor = evaluate.load("meteor")
-    results = meteor.compute(predictions=predictions, references=references)
-    return round(results["meteor"], 4)
-
-def compute_rouge(predictions, references):
-    rouge = evaluate.load("rouge")
-    results = rouge.compute(predictions=predictions, references=references)
-    return {
-        "rouge1": round(results["rouge1"], 4),
-        "rougeL": round(results["rougeL"], 4)
-    }
-
-def evaluate_metrics(predictions, references):
-    bleu_scores = compute_bleu(predictions, references)
-    meteor_score = compute_meteor(predictions, references)
-    rouge_scores = compute_rouge(predictions, references)
+def compute_loss(logits, targets, pad_id, smoothing=0.1):
+    B, L, V = logits.size()
+    logits = logits.reshape(-1, V)
+    targets = targets.reshape(-1)
     
-    metrics = {
-        **bleu_scores,
-        "meteor": meteor_score,
-        **rouge_scores
-    }
+    mask = (targets != pad_id)
+    if mask.sum() == 0: 
+        return torch.tensor(0.0, device=logits.device)
     
-    return pd.DataFrame([metrics])
+    logits = logits[mask]
+    targets = targets[mask]
+    
+    with torch.no_grad():
+        true_dist = torch.zeros_like(logits)
+        true_dist.fill_(smoothing / (V - 1))
+        true_dist.scatter_(1, targets.unsqueeze(1), 1.0 - smoothing)
+        
+    log_probs = F.log_softmax(logits, dim=-1)
+    loss = -(true_dist * log_probs).sum(dim=-1).mean()
+    return loss
+
+def evaluate_metrics(refs, hyps):
+    smooth_fn = SmoothingFunction().method1
+    rouge_scorer_obj = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
+    
+    bleu1, bleu2, bleu3, bleu4, meteor, rougeL = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    n = len(refs)
+    
+    for r, h in zip(refs, hyps):
+        ref_tokens = vi_seg(r)
+        hyp_tokens = vi_seg(h)
+        if not hyp_tokens: continue
+            
+        bleu1 += sentence_bleu([ref_tokens], hyp_tokens, weights=(1,0,0,0), smoothing_function=smooth_fn)
+        bleu2 += sentence_bleu([ref_tokens], hyp_tokens, weights=(0.5,0.5,0,0), smoothing_function=smooth_fn)
+        bleu3 += sentence_bleu([ref_tokens], hyp_tokens, weights=(0.33,0.33,0.33,0), smoothing_function=smooth_fn)
+        bleu4 += sentence_bleu([ref_tokens], hyp_tokens, weights=(0.25,0.25,0.25,0.25), smoothing_function=smooth_fn)
+        meteor += meteor_score([ref_tokens], hyp_tokens) 
+        rougeL += rouge_scorer_obj.score(" ".join(ref_tokens), " ".join(hyp_tokens))["rougeL"].fmeasure
+        
+    return pd.DataFrame.from_dict({
+        "BLEU-1": bleu1 / n,
+        "BLEU-2": bleu2 / n,
+        "BLEU-3": bleu3 / n,
+        "BLEU-4": bleu4 / n,
+        "METEOR": meteor / n,
+        "ROUGE-L": rougeL / n
+    })

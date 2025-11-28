@@ -1,77 +1,78 @@
-import os
+import json
 import torch
-import pandas as pd
-from PIL import Image
+import os
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
+from PIL import Image
+from src.data.tokenizer import text_normalize_simple
 
 class VQADataset(Dataset):
-    def __init__(
-        self, 
-        dataframe,  
-        question_tokenizer, 
-        answer_tokenizer, 
-        transform=None, 
-        max_question_len=64, 
-        max_answer_len=32
-    ):
-        """
-        Args:
-            dataframe (pd.DataFrame): DataFrame đã chứa cột 'image_path'.
-            question_tokenizer: Tokenizer của PhoBERT (cho câu hỏi).
-            answer_tokenizer: Tokenizer của GPT (cho câu trả lời).
-            transform: Các phép biến đổi ảnh (Resize, Normalize...).
-            max_question_len: Độ dài tối đa của câu hỏi.
-            max_answer_len: Độ dài tối đa của câu trả lời.
-        """
-        self.data = dataframe
-        self.q_tokenizer = question_tokenizer
-        self.a_tokenizer = answer_tokenizer
+    def __init__(self, json_flat_path, tokenizer, transform, vocab=None, has_answer=True, max_q_len=64):
+        with open(json_flat_path, "r", encoding="utf-8") as f:
+            self.data = json.load(f)
+        self.tokenizer = tokenizer # PhoBERT tokenizer
         self.transform = transform
-        self.max_question_len = max_question_len
-        self.max_answer_len = max_answer_len
-
+        self.vocab = vocab # AnswerVocab
+        self.has_answer = has_answer
+        self.max_q_len = max_q_len
+    
     def __len__(self):
         return len(self.data)
-
+    
     def __getitem__(self, idx):
-        row = self.data.iloc[idx]
-        
-        image_path = row['image_path'] 
+        item = self.data[idx]
+        img_path = item["image_path"]
+        question = item["question"]
         
         try:
-            image = Image.open(image_path).convert("RGB")
-        except (OSError, FileNotFoundError):
-            image = Image.new('RGB', (224, 224), (0, 0, 0))
+            img = Image.open(img_path).convert("RGB")
+            img = self.transform(img)
+        except Exception as e:
+            # Fallback hình đen nếu lỗi load ảnh
+            img = torch.zeros((3, 224, 224))
 
-        if self.transform:
-            pixel_values = self.transform(image)
-        else:
-            pixel_values = image
-
-        question_text = str(row['question'])
-        q_encoding = self.q_tokenizer(
-            question_text,
-            max_length=self.max_question_len,
-            padding='max_length',
+        # Encode question (PhoBERT)
+        encoded = self.tokenizer(
+            text_normalize_simple(question),
+            max_length=self.max_q_len,
             truncation=True,
+            padding="max_length",
             return_tensors="pt"
         )
-
-        answer_text = str(row['answer']) + " " + self.a_tokenizer.eos_token
-        a_encoding = self.a_tokenizer(
-            answer_text,
-            max_length=self.max_answer_len,
-            padding='max_length',
-            truncation=True,
-            return_tensors="pt"
-        )
-
-        labels = a_encoding['input_ids'].squeeze()
-        labels[labels == self.a_tokenizer.pad_token_id] = -100
+        q_input_ids = encoded["input_ids"].squeeze(0)
+        q_attention = encoded["attention_mask"].squeeze(0)
         
-        return {
-            'pixel_values': pixel_values,
-            'question_input_ids': q_encoding['input_ids'].squeeze(),
-            'question_attention_mask': q_encoding['attention_mask'].squeeze(),
-            'labels': labels
+        sample = {
+            "image": img,
+            "question": question,
+            "q_input_ids": q_input_ids,
+            "q_attention_mask": q_attention
         }
+        
+        if self.has_answer and self.vocab:
+            answer = item["answer"]
+            ans_ids = self.vocab.encode(answer)
+            sample["answer"] = answer
+            sample["answer_ids"] = ans_ids
+        
+        return sample
+
+def vqa_collate_fn(batch, pad_id):
+    images = torch.stack([b["image"] for b in batch], dim=0)
+    q_input_ids = torch.stack([b["q_input_ids"] for b in batch], dim=0)
+    q_attention = torch.stack([b["q_attention_mask"] for b in batch], dim=0)
+    
+    out = {
+        "images": images,
+        "q_input_ids": q_input_ids,
+        "q_attention_mask": q_attention,
+        "questions": [b["question"] for b in batch],
+    }
+    
+    if "answer_ids" in batch[0]:
+        ans_seqs = [b["answer_ids"] for b in batch]
+        ans_padded = pad_sequence(ans_seqs, batch_first=True, padding_value=pad_id)
+        out["answer_ids"] = ans_padded
+        out["answers"] = [b["answer"] for b in batch]
+    
+    return out

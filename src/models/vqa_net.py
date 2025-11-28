@@ -1,50 +1,58 @@
 import torch
 import torch.nn as nn
-from src.models.image_encoder import ImageEncoder
-from src.models.text_encoder import TextEncoder
-from src.models.decoder import LSTMDecoder
+from src.models.image_encoder import ViTEncoderTokens
+from src.models.text_encoder import PhoBERTEncoderSeq
+from src.models.decoder import FusionDecoder
 
 class VQANet(nn.Module):
-    def __init__(self, vocab_size, 
-                 vit_name="google/vit-base-patch16-224", 
-                 phobert_name="vinai/phobert-base",
-                 embed_dim=256,
-                 hidden_dim=512,
-                 freeze_encoder=True):
-        super(VQANet, self).__init__()
+    def __init__(self, cfg, vocab):
+        super().__init__()
+        self.cfg = cfg
+        self.vocab = vocab
+        ctx_dim = cfg.DEC_HIDDEN_SIZE
         
-        self.image_encoder = ImageEncoder(vit_name, freeze=freeze_encoder)
-        self.text_encoder = TextEncoder(phobert_name, freeze=freeze_encoder)
-        self.decoder = LSTMDecoder(vocab_size, embed_dim, hidden_dim)
+        # 1. Encoders
+        self.vit = ViTEncoderTokens(cfg.VISION_NAME)
+        self.text_encoder = PhoBERTEncoderSeq(cfg.TEXT_ENCODER_NAME)
         
-        img_dim = self.image_encoder.model.config.hidden_size
-        txt_dim = self.text_encoder.model.config.hidden_size
+        # 2. Projections (về cùng dimension)
+        self.img_proj = nn.Linear(self.vit.out_dim, ctx_dim)
+        self.txt_proj = nn.Linear(self.text_encoder.hidden_size, ctx_dim)
         
-        self.project_h = nn.Linear(img_dim + txt_dim, hidden_dim)
-        self.project_c = nn.Linear(img_dim + txt_dim, hidden_dim)
-        self.dropout = nn.Dropout(0.3)
+        # 3. Decoder
+        self.decoder = FusionDecoder(len(vocab), ctx_dim, vocab.PAD_ID)
+        
+    def build_memory(self, images, q_input_ids, q_attention_mask):
+        # Image Features
+        img_tokens = self.vit(images)
+        img_feats = torch.tanh(self.img_proj(img_tokens))
+        img_ctx = img_feats.mean(dim=1) # (B, C)
+        
+        # Text Features
+        txt_tokens = self.text_encoder(input_ids=q_input_ids, attention_mask=q_attention_mask)
+        txt_feats = torch.tanh(self.txt_proj(txt_tokens)) # (B, L, C)
+        
+        # Create Global Context (for H0 init)
+        mask_exp = q_attention_mask.unsqueeze(-1)
+        txt_sum = (txt_feats * mask_exp).sum(dim=1)
+        lengths = mask_exp.sum(dim=1).clamp(min=1)
+        txt_ctx = txt_sum / lengths
+        
+        global_ctx = torch.tanh(self.decoder.global_fuse(torch.cat([img_ctx, txt_ctx], dim=-1)))
+        global_ctx = self.decoder.global_ln(global_ctx)
+        global_ctx = self.decoder.global_dropout(global_ctx)
+        
+        return img_ctx, txt_feats, q_attention_mask, global_ctx
 
-    def forward(self, pixel_values, question_ids, question_mask, labels=None):
-        img_feat = self.image_encoder(pixel_values)
-        txt_feat = self.text_encoder(question_ids, question_mask)
+    def forward(self, images, q_input_ids, q_attention_mask, ans_input_ids):
+        # 1. Encode & Build Memory
+        img_ctx, memory, memory_mask, global_ctx = self.build_memory(images, q_input_ids, q_attention_mask)
         
-        combined = torch.cat((img_feat, txt_feat), dim=1)
-        combined = self.dropout(combined)
+        # 2. Decode Inputs (Shifted right)
+        dec_in_ids = ans_input_ids[:, :-1]
+        targets = ans_input_ids[:, 1:]
         
-        h0 = torch.tanh(self.project_h(combined)).unsqueeze(0)
-        c0 = torch.tanh(self.project_c(combined)).unsqueeze(0)
-        init_states = (h0, c0)
+        # 3. Pass through Decoder
+        logits = self.decoder(dec_in_ids, img_ctx, memory, memory_mask, global_ctx)
         
-        if labels is not None:
-            decoder_input_ids = labels[:, :-1].clone()
-            decoder_input_ids[decoder_input_ids == -100] = 0
-            
-            logits = self.decoder(decoder_input_ids, init_states)
-            return logits
-        else:
-            return init_states
-
-    def generate_answer(self, pixel_values, question_ids, question_mask, start_token_id, max_length=20):
-        init_states = self.forward(pixel_values, question_ids, question_mask)
-        output_ids = self.decoder.generate(init_states, start_token_id, max_length)
-        return output_ids
+        return logits, targets
