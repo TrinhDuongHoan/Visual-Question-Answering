@@ -55,11 +55,11 @@ def evaluate_metrics(refs, hyps):
         meteor += meteor_score([ref_tokens], hyp_tokens) 
         rougeL += rouge_scorer_obj.score(" ".join(ref_tokens), " ".join(hyp_tokens))["rougeL"].fmeasure
         
-    return pd.DataFrame.from_dict({
+    return pd.DataFrame.from_dict([{
         "BLEU-1": bleu1 / n,
         "BLEU-2": bleu2 / n,
         "BLEU-3": bleu3 / n,
         "BLEU-4": bleu4 / n,
         "METEOR": meteor / n,
         "ROUGE-L": rougeL / n
-    })
+    }])
