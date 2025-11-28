@@ -9,11 +9,12 @@ class VQANet(nn.Module):
                  vit_name="google/vit-base-patch16-224", 
                  phobert_name="vinai/phobert-base",
                  embed_dim=256,
-                 hidden_dim=512):
+                 hidden_dim=512,
+                 freeze_encoder=True):
         super(VQANet, self).__init__()
         
-        self.image_encoder = ImageEncoder(vit_name, freeze=True)
-        self.text_encoder = TextEncoder(phobert_name, freeze=True)
+        self.image_encoder = ImageEncoder(vit_name, freeze=freeze_encoder)
+        self.text_encoder = TextEncoder(phobert_name, freeze=freeze_encoder)
         self.decoder = LSTMDecoder(vocab_size, embed_dim, hidden_dim)
         
         img_dim = self.image_encoder.model.config.hidden_size
