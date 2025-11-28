@@ -24,7 +24,7 @@ class Config:
     IMAGE_SIZE = 224
     BATCH_SIZE = 8
     NUM_WORKERS = 4
-    NUM_EPOCHS = 10
+    NUM_EPOCHS = 50
     EARLY_STOP_PATIENCE = 3
     
     LR_VIT_PHOBERT = 2e-5      
