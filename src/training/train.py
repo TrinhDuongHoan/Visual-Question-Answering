@@ -60,7 +60,7 @@ class Trainer:
             train_loss = self.train_epoch(epoch)
             val_loss = self.eval_epoch(epoch)
             
-            print(f"Epoch {epoch+1}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+            print(f"Epoch {epoch+1}/{self.cfg.NUM_EPOCHS}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
             self.scheduler.step(val_loss)
             
             if val_loss < self.best_loss:
