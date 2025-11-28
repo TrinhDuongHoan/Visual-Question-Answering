@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from src.models.image_encoder import ViTEncoderTokens
-from src.models.text_encoder import PhoBERTEncoderSeq
+from src.models.image_encoder import ViTEncoder
+from src.models.text_encoder import PhoBERTEncoder
 from src.models.decoder import FusionDecoder
 
 class VQANet(nn.Module):
@@ -12,8 +12,8 @@ class VQANet(nn.Module):
         ctx_dim = cfg.DEC_HIDDEN_SIZE
         
         # 1. Encoders
-        self.vit = ViTEncoderTokens(cfg.VISION_NAME)
-        self.text_encoder = PhoBERTEncoderSeq(cfg.TEXT_ENCODER_NAME)
+        self.vit = ViTEncoder(cfg.VISION_NAME)
+        self.text_encoder = PhoBERTEncoder(cfg.TEXT_ENCODER_NAME)
         
         # 2. Projections (về cùng dimension)
         self.img_proj = nn.Linear(self.vit.out_dim, ctx_dim)
