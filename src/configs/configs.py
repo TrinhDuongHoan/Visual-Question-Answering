@@ -35,7 +35,7 @@ class Config:
 
     # ==== MODEL CONFIG ====
     TEXT_ENCODER_NAME = "vinai/phobert-base-v2"
-    VISION_NAME = "vit_base_patch16_224"
+    VISION_NAME = "vit_tiny_patch16_224"
     MAX_QUESTION_LEN = 64
     MAX_ANSWER_LEN = 15
     DEC_HIDDEN_SIZE = 256
