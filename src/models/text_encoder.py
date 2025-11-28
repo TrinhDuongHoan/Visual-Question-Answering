@@ -1,4 +1,3 @@
-%%writefile src/models/text_encoder.py
 import torch.nn as nn
 from transformers import AutoModel
 
