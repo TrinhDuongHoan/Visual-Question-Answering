@@ -7,12 +7,20 @@ from PIL import Image
 from src.data.tokenizer import text_normalize_simple
 
 class VQADataset(Dataset):
-    def __init__(self, json_flat_path, tokenizer, transform, vocab=None, has_answer=True, max_q_len=64):
+    def __init__(self, json_flat_path, tokenizer, transform, vocab=None, has_answer=True, max_q_len=128, ocr_cache_path=None):
         with open(json_flat_path, "r", encoding="utf-8") as f:
             self.data = json.load(f)
-        self.tokenizer = tokenizer # PhoBERT tokenizer
+            
+        # [NEW] Load OCR Cache
+        self.ocr_data = {}
+        if ocr_cache_path and os.path.exists(ocr_cache_path):
+            print(f"Loading OCR cache from {ocr_cache_path}...")
+            with open(ocr_cache_path, "r", encoding="utf-8") as f:
+                self.ocr_data = json.load(f)
+        
+        self.tokenizer = tokenizer
         self.transform = transform
-        self.vocab = vocab # AnswerVocab
+        self.vocab = vocab
         self.has_answer = has_answer
         self.max_q_len = max_q_len
     
@@ -24,16 +32,23 @@ class VQADataset(Dataset):
         img_path = item["image_path"]
         question = item["question"]
         
+        # [NEW] Lấy nội dung OCR
+        ocr_text = self.ocr_data.get(img_path, "")
+        
+        # [NEW] Cải tiến prompt cho PhoBERT
+        # Input sẽ là: "câu hỏi ? [SEP] ngữ cảnh: nội dung ocr"
+        # Việc này giúp PhoBERT hiểu rằng phần sau là thông tin bổ trợ
+        final_input_text = f"{text_normalize_simple(question)} {self.tokenizer.sep_token} ngữ cảnh: {text_normalize_simple(ocr_text)}"
+        
         try:
             img = Image.open(img_path).convert("RGB")
             img = self.transform(img)
         except Exception as e:
-            # Fallback hình đen nếu lỗi load ảnh
             img = torch.zeros((3, 224, 224))
 
-        # Encode question (PhoBERT)
+        # Encode question + OCR
         encoded = self.tokenizer(
-            text_normalize_simple(question),
+            final_input_text, # Dùng text đã ghép
             max_length=self.max_q_len,
             truncation=True,
             padding="max_length",
@@ -44,7 +59,7 @@ class VQADataset(Dataset):
         
         sample = {
             "image": img,
-            "question": question,
+            "question": question, # Giữ nguyên câu hỏi gốc để hiển thị
             "q_input_ids": q_input_ids,
             "q_attention_mask": q_attention
         }

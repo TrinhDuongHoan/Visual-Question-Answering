@@ -16,6 +16,7 @@ class Config:
     TRAIN_JSON_FLAT = os.path.join(WORKING_DIR, "train_flat.json")
     DEV_JSON_FLAT   = os.path.join(WORKING_DIR, "val_flat.json")
     TEST_JSON_FLAT  = os.path.join(WORKING_DIR, "test_flat.json")
+    OCR_CACHE_PATH  = os.path.join(WORKING_DIR, "ocr_cache.json")
     
     CHECKPOINT_DIR = "checkpoints"
     
@@ -36,7 +37,7 @@ class Config:
     # ==== MODEL CONFIG ====
     TEXT_ENCODER_NAME = "vinai/phobert-base-v2"
     VISION_NAME = "vit_tiny_patch16_224"
-    MAX_QUESTION_LEN = 64
+    MAX_QUESTION_LEN = 128
     MAX_ANSWER_LEN = 15
     DEC_HIDDEN_SIZE = 256
     MIN_ANSWER_FREQ = 1

@@ -1,5 +1,4 @@
 venv/
-trained_models/
 __pycache__/
 *.pyc
 checkpoints/
