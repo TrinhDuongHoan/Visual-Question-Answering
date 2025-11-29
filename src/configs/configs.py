@@ -39,5 +39,5 @@ class Config:
     MAX_QUESTION_LEN = 64
     MAX_ANSWER_LEN = 15
     DEC_HIDDEN_SIZE = 256
-    MIN_ANSWER_FREQ = 3
+    MIN_ANSWER_FREQ = 1
     NUM_BEAMS = 3
